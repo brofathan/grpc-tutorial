@@ -1,3 +1,6 @@
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::{Receiver, Sender};
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::{transport::Server, Request, Response, Status};
 
 pub mod services {
@@ -6,7 +9,8 @@ pub mod services {
 
 use services::{
     payment_service_server::{PaymentService, PaymentServiceServer},
-    PaymentRequest, PaymentResponse,
+    transaction_service_server::{TransactionService, TransactionServiceServer},
+    PaymentRequest, PaymentResponse, TransactionRequest, TransactionResponse,
 };
 
 #[derive(Default)]
@@ -20,6 +24,48 @@ impl PaymentService for MyPaymentService {
     ) -> Result<Response<PaymentResponse>, Status> {
         println!("Received Payment Request: {:?}", request);
         Ok(Response::new(PaymentResponse { success: true }))
+    }
+}
+
+#[derive(Default)]
+pub struct MyTransactionService {}
+
+#[tonic::async_trait]
+impl TransactionService for MyTransactionService {
+    type GetTransactionHistoryStream = ReceiverStream<Result<TransactionResponse, Status>>;
+
+    async fn get_transaction_history(
+        &self,
+        request: Request<TransactionRequest>,
+    ) -> Result<Response<Self::GetTransactionHistoryStream>, Status> {
+        println!("Received Transaction Request: {:?}", request);
+        let (tx, rx): (
+            Sender<Result<TransactionResponse, Status>>,
+            Receiver<Result<TransactionResponse, Status>>,
+        ) = mpsc::channel(4);
+
+        tokio::spawn(async move {
+            for i in 0..30 {
+                if tx
+                    .send(Ok(TransactionResponse {
+                        transaction_id: format!("trans_{}", i),
+                        status: "Completed".to_string(),
+                        amount: 100.0,
+                        timestamp: "2022-01-01T12:00:00Z".to_string(),
+                    }))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+
+                if i % 10 == 9 {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                }
+            }
+        });
+
+        Ok(Response::new(ReceiverStream::new(rx)))
     }
 }
 
